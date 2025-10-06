@@ -147,11 +147,7 @@ dist/
 # yarn.lock
 # pnpm-lock.yaml
 
-# Docker
-.dockerignore
-Dockerfile
-docker-compose.yml
-docker-compose.yaml
+
 
 # Backup files
 *.bak
