@@ -223,6 +223,218 @@ docker compose down
 docker compose down -v
 ```
 
+### Phase 6 – Dev Workflow (Hot Reload via Compose Override)
+
+Create `docker-compose.override.yml` next to `docker-compose.yml` (example):
+```
+services:
+  backend:
+    environment:
+      - NODE_ENV=development
+      - PORT=5000
+      - MONGODB_URI=mongodb://mongo:27017/todoapp
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    command: sh -c "npm install && npx nodemon server.js"
+    restart: unless-stopped
+
+  frontend:
+    environment:
+      - NODE_ENV=development
+      - NEXT_TELEMETRY_DISABLED=1
+      # - NEXT_PUBLIC_API_BASE=http://localhost:5000
+      - CHOKIDAR_USEPOLLING=true
+      # - WATCHPACK_POLLING=true
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: sh -c "npm install && npm run dev"
+    restart: unless-stopped
+```
+
+Run dev stack:
+```
+docker compose up
+docker compose ps
+docker compose logs -f backend
+docker compose logs -f frontend
+```
+
+Fast rebuilds:
+```
+docker compose build backend && docker compose up -d backend
+docker compose build frontend && docker compose up -d frontend
+```
+
+Reset state:
+```
+docker compose down          # keep DB
+docker compose down -v       # wipe DB data
+```
+
+Troubleshooting file watching on Windows:
+```
+# ensure polling env vars are set as above; if still flaky, add WATCHPACK_POLLING=true to frontend
+```
+
+### Phase 7 – Production Optimization & Security
+
+Pin image versions (examples):
+```
+node:18.20.4-alpine3.19
+mongo:6.0.18
+```
+
+Rebuild reproducibly:
+```
+docker compose build --no-cache
+docker compose up -d
+```
+
+Add restart policies / healthchecks (compose snippet idea):
+```
+# services:
+#   backend:
+#     restart: unless-stopped
+#     healthcheck:
+#       test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 5
+#   mongo:
+#     restart: unless-stopped
+#     healthcheck:
+#       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+```
+
+Security hardening (commands):
+```
+# Image scanning
+docker scout quickview || docker scan todo-backend
+docker scan todo-frontend
+
+# Limit resources (compose `deploy.resources`) – then:
+docker compose up -d
+
+# Run as non-root (already in Dockerfiles), enforce at runtime if needed:
+docker compose up -d
+```
+
+Logging & cleanup:
+```
+# Tail with timestamps
+docker compose logs --timestamps --tail=200 backend
+
+# Prune images/containers (careful in prod)
+docker system prune -af
+# Volumes are preserved unless you add --volumes
+# To wipe app volumes intentionally:
+docker compose down -v
+```
+
+### Phase 5 – Deploy to EC2 (from GitHub)
+
+Step 1 – Connect to your instance
+```
+ssh -i <key>.pem ec2-user@<EC2_PUBLIC_IP>
+```
+
+Step 2 – Install Docker Engine, Docker Compose (v2 binary), and Git
+```
+# Update packages
+sudo dnf update -y
+
+# Install Docker + Git
+sudo dnf install -y docker git
+
+# Start and enable Docker
+sudo systemctl enable --now docker
+
+# Allow ec2-user to run docker without sudo
+sudo usermod -aG docker ec2-user
+# open a new SSH session after this or run: newgrp docker
+
+# Install Docker Compose v2 manually (official binary)
+sudo curl -SL https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+sudo ln -s /usr/local/bin/docker-compose /usr/bin/docker-compose 2>/dev/null
+
+# Verify installations (Compose v2 also works via `docker compose`)
+docker --version
+docker compose version
+docker-compose version
+git --version
+```
+
+Expected output example
+```
+Docker version 27.x.x, build xxxxxxx
+Docker Compose version v2.29.7
+git version 2.x.x
+```
+
+Step 3 – Clone your GitHub repository
+```
+cd ~
+git clone https://github.com/<your-username>/<your-repo>.git
+cd <your-repo>
+# If private: use SSH or a token
+```
+
+Step 4 – Build and Run with Docker Compose
+```
+# Clean any old containers
+docker compose down --remove-orphans
+
+# Build and start everything
+docker compose up -d --build
+
+# List running services
+docker compose ps
+```
+
+Step 5 – Security group + Test from your laptop
+- Open your EC2 Security Group temporarily to your IP:
+  - TCP 3000 (frontend)
+  - TCP 5000 (backend)
+- Do NOT expose 27017 (Mongo) publicly.
+
+Test:
+```
+curl http://<EC2_PUBLIC_IP>:5000/api/health
+curl http://<EC2_PUBLIC_IP>:3000
+```
+
+Step 6 – Logs & Debugging
+```
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose logs -f mongo
+docker compose exec mongo mongosh --eval "db.adminCommand('ping')"
+```
+
+Step 7 – Redeploy New Code from GitHub
+```
+cd ~/<your-repo>
+git pull origin main
+docker compose down --remove-orphans
+docker compose up -d --build
+```
+
+Step 8 – Maintenance and Cleanup
+```
+# Restart a specific service
+docker compose restart backend
+
+# Remove stopped containers, unused images
+docker system prune -af
+# Note: volumes are NOT removed unless you add --volumes (data loss!)
+# To wipe project volumes intentionally:
+# docker compose down -v
+```
+
 ### Troubleshooting Snippets
 
 ```
